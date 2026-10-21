@@ -141,6 +141,17 @@ $$;
 revoke all on function public.consume_ai_match_quota(uuid, integer) from public, anon, authenticated;
 grant execute on function public.consume_ai_match_quota(uuid, integer) to service_role;
 
+create or replace function public.refund_ai_match_quota(p_user_id uuid)
+returns void language sql security definer set search_path = public as $$
+  update public.ai_match_usage
+  set request_count = greatest(0, request_count - 1)
+  where user_id = p_user_id
+    and usage_date = (now() at time zone 'Asia/Shanghai')::date
+    and request_count > 0
+$$;
+revoke all on function public.refund_ai_match_quota(uuid) from public, anon, authenticated;
+grant execute on function public.refund_ai_match_quota(uuid) to service_role;
+
 create or replace function public.list_collaboration_intents()
 returns table (id uuid, author_id uuid, title text, description text, needed_roles text[], status text, created_at timestamptz, author_name text, author_school text, author_role_title text)
 language sql stable security definer set search_path = public as $$
