@@ -9,3 +9,15 @@
     min-width: 0;
   }
 }
+
+.intent-card .card-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.intent-card .avatar.small {
+  width: 24px;
+  height: 24px;
+  font-size: 10px;
+}

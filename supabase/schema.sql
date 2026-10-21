@@ -101,6 +101,17 @@ language sql stable security definer set search_path = public as $$
   order by p.updated_at desc;
 $$;
 
+create or replace function public.list_collaboration_intents()
+returns table (id uuid, author_id uuid, title text, description text, needed_roles text[], status text, created_at timestamptz, author_name text, author_school text, author_role_title text)
+language sql stable security definer set search_path = public as $$
+  select i.id,i.author_id,i.title,i.description,i.needed_roles,i.status,i.created_at,
+    p.display_name,p.school,p.role_title
+  from public.collaboration_intents i
+  join public.profiles p on p.id = i.author_id
+  where public.is_onboarded() and p.is_onboarded
+  order by i.created_at desc
+$$;
+
 create or replace function public.create_invitation(p_max_uses integer default 20, p_expires_at timestamptz default null) returns text language plpgsql security definer set search_path = public as $$
 declare v_code text;
 begin
