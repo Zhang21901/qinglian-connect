@@ -1,0 +1,98 @@
+create extension if not exists pgcrypto;
+
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null default '', school text not null default '', role_title text not null default '',
+  focus text not null default '', bio text not null default '', experiences text not null default '',
+  skills text[] not null default '{}', collaboration_roles text[] not null default '{}',
+  collaboration_note text not null default '', weekly_hours text not null default '', availability text[] not null default '{}',
+  contact text not null default '', contact_visibility text not null default 'hidden' check (contact_visibility in ('public','hidden')),
+  is_admin boolean not null default false, is_onboarded boolean not null default false,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+
+create table if not exists public.invitations (
+  id uuid primary key default gen_random_uuid(), code text not null unique,
+  max_uses integer not null default 20 check (max_uses > 0), used_count integer not null default 0 check (used_count >= 0),
+  active boolean not null default true, expires_at timestamptz, created_by uuid references public.profiles(id), created_at timestamptz not null default now()
+);
+
+create table if not exists public.collaboration_intents (
+  id uuid primary key default gen_random_uuid(), author_id uuid not null references public.profiles(id) on delete cascade,
+  title text not null check (char_length(title) between 3 and 100), description text not null check (char_length(description) between 10 and 1000),
+  needed_roles text[] not null default '{}', status text not null default 'open' check (status in ('open','closed')), created_at timestamptz not null default now()
+);
+
+create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path = public as $$
+begin insert into public.profiles (id, display_name) values (new.id, coalesce(new.raw_user_meta_data->>'name', '')); return new; end;
+$$;
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
+
+create or replace function public.is_onboarded() returns boolean language sql stable security definer set search_path = public as $$
+  select exists(select 1 from public.profiles where id = auth.uid() and is_onboarded)
+$$;
+create or replace function public.is_admin() returns boolean language sql stable security definer set search_path = public as $$
+  select exists(select 1 from public.profiles where id = auth.uid() and is_admin and is_onboarded)
+$$;
+
+alter table public.profiles enable row level security;
+alter table public.invitations enable row level security;
+alter table public.collaboration_intents enable row level security;
+create policy "profiles: read own" on public.profiles for select to authenticated using (id = auth.uid());
+create policy "profiles: update own" on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
+create policy "intents: members read" on public.collaboration_intents for select to authenticated using (public.is_onboarded());
+create policy "intents: members create" on public.collaboration_intents for insert to authenticated with check (author_id = auth.uid() and public.is_onboarded());
+create policy "intents: authors update" on public.collaboration_intents for update to authenticated using (author_id = auth.uid()) with check (author_id = auth.uid());
+create policy "intents: authors delete" on public.collaboration_intents for delete to authenticated using (author_id = auth.uid());
+create policy "invitations: admins manage" on public.invitations for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+create or replace function public.complete_profile(p_invite_code text, p_data jsonb) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_first boolean; v_invite public.invitations%rowtype;
+begin
+  if auth.uid() is null then raise exception '请先登录'; end if;
+  select not exists(select 1 from public.profiles where is_onboarded) into v_first;
+  if not v_first then
+    select * into v_invite from public.invitations where upper(code) = upper(trim(coalesce(p_invite_code,''))) and active and used_count < max_uses and (expires_at is null or expires_at > now()) for update;
+    if not found then raise exception '邀请码无效或已失效'; end if;
+    update public.invitations set used_count = used_count + 1 where id = v_invite.id;
+  end if;
+  update public.profiles set
+    display_name = left(coalesce(p_data->>'display_name',''),50), school = left(coalesce(p_data->>'school',''),100), role_title = left(coalesce(p_data->>'role_title',''),100),
+    focus = left(coalesce(p_data->>'focus',''),160), bio = left(coalesce(p_data->>'bio',''),1200), experiences = left(coalesce(p_data->>'experiences',''),2000),
+    skills = array(select left(value,40) from jsonb_array_elements_text(coalesce(p_data->'skills','[]'::jsonb)) value limit 12),
+    collaboration_roles = array(select left(value,40) from jsonb_array_elements_text(coalesce(p_data->'collaboration_roles','[]'::jsonb)) value limit 8),
+    collaboration_note = left(coalesce(p_data->>'collaboration_note',''),1200), weekly_hours = left(coalesce(p_data->>'weekly_hours',''),40),
+    availability = array(select left(value,40) from jsonb_array_elements_text(coalesce(p_data->'availability','[]'::jsonb)) value limit 8),
+    contact = left(coalesce(p_data->>'contact',''),120), contact_visibility = case when p_data->>'contact_visibility' = 'public' then 'public' else 'hidden' end,
+    is_onboarded = true, is_admin = case when v_first then true else is_admin end, updated_at = now()
+  where id = auth.uid();
+  return (select to_jsonb(p) - 'contact' from public.profiles p where p.id = auth.uid());
+end;
+$$;
+
+create or replace function public.search_members(p_query text default '', p_tag text default '')
+returns table (id uuid, display_name text, school text, role_title text, focus text, bio text, skills text[], collaboration_roles text[], weekly_hours text, availability text[], contact text, contact_visible boolean)
+language sql stable security definer set search_path = public as $$
+  select p.id,p.display_name,p.school,p.role_title,p.focus,p.bio,p.skills,p.collaboration_roles,p.weekly_hours,p.availability,
+    case when p.contact_visibility = 'public' then p.contact else '' end, p.contact_visibility = 'public'
+  from public.profiles p
+  where public.is_onboarded() and p.is_onboarded and p.id <> auth.uid()
+    and (coalesce(trim(p_query),'') = '' or concat_ws(' ',p.display_name,p.school,p.role_title,p.focus,p.bio,p.experiences,array_to_string(p.skills,' '),array_to_string(p.collaboration_roles,' '),p.collaboration_note,p.weekly_hours,array_to_string(p.availability,' ')) ilike '%' || trim(p_query) || '%')
+    and (coalesce(trim(p_tag),'') = '' or p_tag = any(p.skills) or p_tag = any(p.collaboration_roles) or p_tag = any(p.availability))
+  order by p.updated_at desc;
+$$;
+
+create or replace function public.create_invitation(p_max_uses integer default 20, p_expires_at timestamptz default null) returns text language plpgsql security definer set search_path = public as $$
+declare v_code text;
+begin
+  if not public.is_admin() then raise exception '仅管理员可创建邀请码'; end if;
+  v_code := 'JOIN-' || upper(substring(encode(gen_random_bytes(5),'hex') from 1 for 8));
+  insert into public.invitations(code,max_uses,expires_at,created_by) values (v_code,greatest(1,least(p_max_uses,200)),p_expires_at,auth.uid());
+  return v_code;
+end;
+$$;
+
+create or replace function public.admin_stats() returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('members',(select count(*) from public.profiles where is_onboarded),'profile_completion',(select coalesce(round(avg(case when bio <> '' and array_length(skills,1) > 0 then 100 else 45 end)),0) from public.profiles where is_onboarded),'open_intents',(select count(*) from public.collaboration_intents where status='open'),'invites',(select count(*) from public.invitations where active)) where public.is_admin()
+$$;
