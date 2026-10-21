@@ -42,8 +42,11 @@ Deno.serve(async (req) => {
   if (query.length < 2 || query.length > 300) return json({ error: "请输入 2 到 300 个字的匹配需求" }, 400);
 
   const userClient = createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${token}` } } });
-  const { data: candidates, error: candidatesError } = await userClient.rpc("ai_match_candidates");
-  if (candidatesError) return json({ error: "暂时无法读取成员资料" }, 500);
+  const [{ data: candidates, error: candidatesError }, { data: intentCandidates, error: intentsError }] = await Promise.all([
+    userClient.rpc("ai_match_candidates"),
+    userClient.rpc("ai_match_intent_candidates"),
+  ]);
+  if (candidatesError || intentsError) return json({ error: "暂时无法读取社群匹配资料" }, 500);
 
   const modelListResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
     headers: { "x-goog-api-key": geminiKey },
@@ -81,8 +84,14 @@ Deno.serve(async (req) => {
     `协作：${(person.collaboration_roles || []).join("、") || "未填写"}；${person.weekly_hours || "时间待补充"}；${(person.availability || []).join("、") || ""}`,
     `简介：${String(person.bio || "").slice(0, 120)}`,
   ].join("\n")).join("\n\n");
+  const intentContext = (intentCandidates || []).map((intent, index) => [
+    `#${index + 1} ${intent.title}`,
+    `发起人：${intent.author_name}｜${intent.author_school}｜${intent.author_role_title}`,
+    `需要角色：${(intent.needed_roles || []).join("、") || "未填写"}`,
+    `内容：${String(intent.description || "").slice(0, 300)}`,
+  ].join("\n")).join("\n\n");
 
-  const prompt = `你是“知遇”青年社群的协作匹配助手。用户需求：${query}\n\n以下是成员公开资料摘要（不包含联系方式）：\n${context || "目前没有其他完成资料的成员。"}\n\n请用中文回答：先用 1-2 句说明匹配判断；然后列出最合适的至多 5 位成员，按“姓名（学校/机构，角色）：匹配理由”格式。只能依据给出的资料，不要编造信息，不要输出联系方式；没有合适人选时明确说明。`;
+  const prompt = `你是“知遇”青年社群的协作匹配助手。用户需求：${query}\n\n以下是成员公开资料摘要（不包含联系方式）：\n${context || "目前没有其他完成资料的成员。"}\n\n以下是正在招募的协作意向：\n${intentContext || "目前没有开放的协作意向。"}\n\n请用中文回答：先用 1-2 句说明匹配判断；然后分别输出“适合认识的成员”和“值得参与的协作意向”两个小节。成员最多 5 位，格式为“姓名（学校/机构，角色）：匹配理由”；意向最多 5 项，格式为“意向标题（发起人）：匹配理由”。只依据给出的资料，不要编造信息，不要输出联系方式；没有匹配项时明确说明。`;
   const geminiResponse = await generateWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent`, {
     method: "POST",
     headers: { "x-goog-api-key": geminiKey, "Content-Type": "application/json" },

@@ -119,6 +119,17 @@ language sql stable security definer set search_path = public as $$
   limit 200
 $$;
 
+create or replace function public.ai_match_intent_candidates()
+returns table (id uuid, title text, description text, needed_roles text[], created_at timestamptz, author_name text, author_school text, author_role_title text)
+language sql stable security definer set search_path = public as $$
+  select i.id,i.title,i.description,i.needed_roles,i.created_at,p.display_name,p.school,p.role_title
+  from public.collaboration_intents i
+  join public.profiles p on p.id = i.author_id
+  where public.is_onboarded() and i.status = 'open' and p.is_onboarded
+  order by i.created_at desc
+  limit 100
+$$;
+
 create or replace function public.consume_ai_match_quota(p_user_id uuid, p_daily_limit integer default 15)
 returns integer language plpgsql security definer set search_path = public as $$
 declare v_count integer;
