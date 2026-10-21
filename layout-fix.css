@@ -1,0 +1,11 @@
+.shell > main {
+  grid-column: 2;
+  min-width: 0;
+}
+
+@media (max-width: 800px) {
+  .shell > main {
+    grid-column: 1;
+    min-width: 0;
+  }
+}
