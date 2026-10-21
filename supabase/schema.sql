@@ -96,3 +96,20 @@ $$;
 create or replace function public.admin_stats() returns jsonb language sql stable security definer set search_path = public as $$
   select jsonb_build_object('members',(select count(*) from public.profiles where is_onboarded),'profile_completion',(select coalesce(round(avg(case when bio <> '' and array_length(skills,1) > 0 then 100 else 45 end)),0) from public.profiles where is_onboarded),'open_intents',(select count(*) from public.collaboration_intents where status='open'),'invites',(select count(*) from public.invitations where active)) where public.is_admin()
 $$;
+
+drop policy if exists "profiles: update own" on public.profiles;
+create or replace function public.update_profile(p_data jsonb) returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_onboarded() then raise exception '请先完成资料'; end if;
+  update public.profiles set
+    display_name = left(coalesce(p_data->>'display_name',''),50), school = left(coalesce(p_data->>'school',''),100), role_title = left(coalesce(p_data->>'role_title',''),100),
+    focus = left(coalesce(p_data->>'focus',''),160), bio = left(coalesce(p_data->>'bio',''),1200), experiences = left(coalesce(p_data->>'experiences',''),2000),
+    skills = array(select left(value,40) from jsonb_array_elements_text(coalesce(p_data->'skills','[]'::jsonb)) value limit 12),
+    collaboration_roles = array(select left(value,40) from jsonb_array_elements_text(coalesce(p_data->'collaboration_roles','[]'::jsonb)) value limit 8),
+    collaboration_note = left(coalesce(p_data->>'collaboration_note',''),1200), weekly_hours = left(coalesce(p_data->>'weekly_hours',''),40),
+    availability = array(select left(value,40) from jsonb_array_elements_text(coalesce(p_data->'availability','[]'::jsonb)) value limit 8),
+    contact = left(coalesce(p_data->>'contact',''),120), contact_visibility = case when p_data->>'contact_visibility' = 'public' then 'public' else 'hidden' end,
+    updated_at = now()
+  where id = auth.uid();
+end;
+$$;
