@@ -105,7 +105,10 @@ create or replace function public.create_invitation(p_max_uses integer default 2
 declare v_code text;
 begin
   if not public.is_admin() then raise exception '仅管理员可创建邀请码'; end if;
-  v_code := 'JOIN-' || upper(substring(encode(gen_random_bytes(5),'hex') from 1 for 8));
+  loop
+    v_code := 'JOIN-' || upper(substring(md5(random()::text || clock_timestamp()::text || auth.uid()::text) from 1 for 8));
+    exit when not exists (select 1 from public.invitations where code = v_code);
+  end loop;
   insert into public.invitations(code,max_uses,expires_at,created_by) values (v_code,greatest(1,least(p_max_uses,200)),p_expires_at,auth.uid());
   return v_code;
 end;
