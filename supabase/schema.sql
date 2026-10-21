@@ -7,6 +7,7 @@ create table if not exists public.profiles (
   skills text[] not null default '{}', collaboration_roles text[] not null default '{}',
   collaboration_note text not null default '', weekly_hours text not null default '', availability text[] not null default '{}',
   contact text not null default '', contact_visibility text not null default 'hidden' check (contact_visibility in ('public','hidden')),
+  avatar_url text not null default '',
   is_admin boolean not null default false, is_onboarded boolean not null default false,
   created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
@@ -29,6 +30,21 @@ create table if not exists public.ai_match_usage (
   request_count integer not null default 0 check (request_count >= 0),
   primary key (user_id, usage_date)
 );
+
+alter table public.profiles add column if not exists avatar_url text not null default '';
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update set public = true, file_size_limit = 5242880, allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+
+drop policy if exists "avatars: members read" on storage.objects;
+create policy "avatars: members read" on storage.objects for select to authenticated using (bucket_id = 'avatars');
+drop policy if exists "avatars: users upload own" on storage.objects;
+create policy "avatars: users upload own" on storage.objects for insert to authenticated with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "avatars: users update own" on storage.objects;
+create policy "avatars: users update own" on storage.objects for update to authenticated using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text) with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "avatars: users delete own" on storage.objects;
+create policy "avatars: users delete own" on storage.objects for delete to authenticated using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 
 create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path = public as $$
 begin insert into public.profiles (id, display_name) values (new.id, coalesce(new.raw_user_meta_data->>'name', '')); return new; end;
@@ -98,9 +114,9 @@ end;
 $$;
 
 create or replace function public.search_members(p_query text default '', p_tag text default '')
-returns table (id uuid, display_name text, school text, role_title text, focus text, bio text, skills text[], collaboration_roles text[], weekly_hours text, availability text[], contact text, contact_visible boolean)
+returns table (id uuid, display_name text, school text, role_title text, focus text, bio text, skills text[], collaboration_roles text[], weekly_hours text, availability text[], avatar_url text, contact text, contact_visible boolean)
 language sql stable security definer set search_path = public as $$
-  select p.id,p.display_name,p.school,p.role_title,p.focus,p.bio,p.skills,p.collaboration_roles,p.weekly_hours,p.availability,
+  select p.id,p.display_name,p.school,p.role_title,p.focus,p.bio,p.skills,p.collaboration_roles,p.weekly_hours,p.availability,p.avatar_url,
     case when p.contact_visibility = 'public' then p.contact else '' end, p.contact_visibility = 'public'
   from public.profiles p
   where public.is_onboarded() and p.is_onboarded and p.id <> auth.uid()
@@ -164,10 +180,10 @@ revoke all on function public.refund_ai_match_quota(uuid) from public, anon, aut
 grant execute on function public.refund_ai_match_quota(uuid) to service_role;
 
 create or replace function public.list_collaboration_intents()
-returns table (id uuid, author_id uuid, title text, description text, needed_roles text[], status text, created_at timestamptz, author_name text, author_school text, author_role_title text)
+returns table (id uuid, author_id uuid, title text, description text, needed_roles text[], status text, created_at timestamptz, author_name text, author_school text, author_role_title text, author_avatar_url text)
 language sql stable security definer set search_path = public as $$
   select i.id,i.author_id,i.title,i.description,i.needed_roles,i.status,i.created_at,
-    p.display_name,p.school,p.role_title
+    p.display_name,p.school,p.role_title,p.avatar_url
   from public.collaboration_intents i
   join public.profiles p on p.id = i.author_id
   where public.is_onboarded() and p.is_onboarded
@@ -203,6 +219,7 @@ begin
     collaboration_note = left(coalesce(p_data->>'collaboration_note',''),1200), weekly_hours = left(coalesce(p_data->>'weekly_hours',''),40),
     availability = array(select left(value,40) from jsonb_array_elements_text(coalesce(p_data->'availability','[]'::jsonb)) value limit 8),
     contact = left(coalesce(p_data->>'contact',''),120), contact_visibility = case when p_data->>'contact_visibility' = 'public' then 'public' else 'hidden' end,
+    avatar_url = left(coalesce(p_data->>'avatar_url', avatar_url), 500),
     updated_at = now()
   where id = auth.uid();
 end;
