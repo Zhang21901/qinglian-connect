@@ -29,6 +29,19 @@ $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
 
+create or replace function public.ensure_profile() returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_profile public.profiles;
+begin
+  if auth.uid() is null then raise exception 'Authentication required'; end if;
+  insert into public.profiles (id, display_name)
+  values (auth.uid(), coalesce(auth.jwt()->'user_metadata'->>'name', ''))
+  on conflict (id) do nothing;
+  select p into v_profile from public.profiles p where p.id = auth.uid();
+  return to_jsonb(v_profile);
+end;
+$$;
+grant execute on function public.ensure_profile() to authenticated;
+
 create or replace function public.is_onboarded() returns boolean language sql stable security definer set search_path = public as $$
   select exists(select 1 from public.profiles where id = auth.uid() and is_onboarded)
 $$;
