@@ -91,11 +91,16 @@ Deno.serve(async (req) => {
     `内容：${String(intent.description || "").slice(0, 300)}`,
   ].join("\n")).join("\n\n");
 
-  const prompt = `你是“知遇”青年社群的协作匹配助手。用户需求：${query}\n\n以下是成员公开资料摘要（不包含联系方式）：\n${context || "目前没有其他完成资料的成员。"}\n\n以下是正在招募的协作意向：\n${intentContext || "目前没有开放的协作意向。"}\n\n请用中文回答：先用 1-2 句说明匹配判断；然后分别输出“适合认识的成员”和“值得参与的协作意向”两个小节。成员最多 5 位，格式为“姓名（学校/机构，角色）：匹配理由”；意向最多 5 项，格式为“意向标题（发起人）：匹配理由”。只依据给出的资料，不要编造信息，不要输出联系方式；没有匹配项时明确说明。`;
+  const prompt = `你是“知遇”青年社群的协作匹配助手。用户需求：${query}\n\n以下是成员公开资料摘要（不包含联系方式）：\n${context || "目前没有其他完成资料的成员。"}\n\n以下是正在招募的协作意向：\n${intentContext || "目前没有开放的协作意向。"}\n\n请用中文作答，总长度控制在 350 个汉字以内。先用 1-2 句说明匹配判断；随后必须完整输出“适合认识的成员”和“值得参与的协作意向”两个小节。成员最多 5 位，格式为“姓名（学校/机构，角色）：匹配理由”；意向最多 5 项，格式为“意向标题（发起人）：匹配理由”。没有匹配项时写“暂无匹配项”。只依据给出的资料，不要编造信息，不要输出联系方式。最后一行必须是“匹配完成。”。`;
+  const thinkingConfig = selectedModel.startsWith("gemini-3")
+    ? { thinkingLevel: "minimal" }
+    : selectedModel.startsWith("gemini-2.5")
+      ? { thinkingBudget: 0 }
+      : undefined;
   const geminiResponse = await generateWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent`, {
     method: "POST",
     headers: { "x-goog-api-key": geminiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.35, maxOutputTokens: 700 } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.35, maxOutputTokens: 1600, ...(thinkingConfig ? { thinkingConfig } : {}) } }),
   });
   if (!geminiResponse.ok) {
     const providerError = await geminiResponse.text();
