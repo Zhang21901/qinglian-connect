@@ -23,6 +23,13 @@ create table if not exists public.collaboration_intents (
   needed_roles text[] not null default '{}', status text not null default 'open' check (status in ('open','closed')), created_at timestamptz not null default now()
 );
 
+create table if not exists public.ai_match_usage (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  usage_date date not null default (now() at time zone 'Asia/Shanghai')::date,
+  request_count integer not null default 0 check (request_count >= 0),
+  primary key (user_id, usage_date)
+);
+
 create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path = public as $$
 begin insert into public.profiles (id, display_name) values (new.id, coalesce(new.raw_user_meta_data->>'name', '')); return new; end;
 $$;
@@ -53,6 +60,7 @@ $$;
 alter table public.profiles enable row level security;
 alter table public.invitations enable row level security;
 alter table public.collaboration_intents enable row level security;
+alter table public.ai_match_usage enable row level security;
 grant usage on schema public to authenticated;
 grant select on public.profiles to authenticated;
 grant select, insert, update, delete on public.collaboration_intents to authenticated;
@@ -100,6 +108,38 @@ language sql stable security definer set search_path = public as $$
     and (coalesce(trim(p_tag),'') = '' or p_tag = any(p.skills) or p_tag = any(p.collaboration_roles) or p_tag = any(p.availability))
   order by p.updated_at desc;
 $$;
+
+create or replace function public.ai_match_candidates()
+returns table (id uuid, display_name text, school text, role_title text, focus text, bio text, experiences text, skills text[], collaboration_roles text[], weekly_hours text, availability text[])
+language sql stable security definer set search_path = public as $$
+  select p.id,p.display_name,p.school,p.role_title,p.focus,p.bio,p.experiences,p.skills,p.collaboration_roles,p.weekly_hours,p.availability
+  from public.profiles p
+  where public.is_onboarded() and p.is_onboarded and p.id <> auth.uid()
+  order by p.updated_at desc
+  limit 200
+$$;
+
+create or replace function public.consume_ai_match_quota(p_user_id uuid, p_daily_limit integer default 15)
+returns integer language plpgsql security definer set search_path = public as $$
+declare v_count integer;
+begin
+  if not exists (select 1 from public.profiles where id = p_user_id and is_onboarded) then
+    raise exception '请先完成资料';
+  end if;
+  insert into public.ai_match_usage (user_id, usage_date, request_count)
+  values (p_user_id, (now() at time zone 'Asia/Shanghai')::date, 1)
+  on conflict (user_id, usage_date) do update
+    set request_count = public.ai_match_usage.request_count + 1
+    where public.ai_match_usage.request_count < greatest(1, least(p_daily_limit, 100))
+  returning request_count into v_count;
+  if v_count is null then
+    raise exception '今日 AI 匹配次数已用完';
+  end if;
+  return greatest(0, least(p_daily_limit, 100) - v_count);
+end;
+$$;
+revoke all on function public.consume_ai_match_quota(uuid, integer) from public, anon, authenticated;
+grant execute on function public.consume_ai_match_quota(uuid, integer) to service_role;
 
 create or replace function public.list_collaboration_intents()
 returns table (id uuid, author_id uuid, title text, description text, needed_roles text[], status text, created_at timestamptz, author_name text, author_school text, author_role_title text)
