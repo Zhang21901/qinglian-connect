@@ -21,3 +21,60 @@
   height: 24px;
   font-size: 10px;
 }
+
+.intent-summary {
+  display: -webkit-box;
+  min-height: 58px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.intent-card {
+  cursor: pointer;
+}
+
+.text-action {
+  border: 0;
+  background: transparent;
+  color: var(--teal);
+  cursor: pointer;
+  font-size: 12px;
+  margin: 2px 0 13px;
+  padding: 0;
+}
+
+.intent-detail {
+  width: min(720px, 100%);
+}
+
+.intent-detail h2 {
+  margin: 12px 32px 14px 0;
+}
+
+.intent-author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.intent-author b,
+.intent-author small {
+  display: block;
+}
+
+.intent-author small {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.intent-body {
+  color: #3f4b59;
+  font-size: 14px;
+  line-height: 1.9;
+  padding: 20px 0;
+  word-break: break-word;
+}
