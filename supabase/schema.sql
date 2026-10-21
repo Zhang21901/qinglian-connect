@@ -33,6 +33,9 @@ create or replace function public.ensure_profile() returns jsonb language plpgsq
 declare v_profile public.profiles;
 begin
   if auth.uid() is null then raise exception 'Authentication required'; end if;
+  if not exists (select 1 from auth.users where id = auth.uid()) then
+    raise exception 'Authentication required';
+  end if;
   insert into public.profiles (id, display_name)
   values (auth.uid(), coalesce(auth.jwt()->'user_metadata'->>'name', ''))
   on conflict (id) do nothing;
